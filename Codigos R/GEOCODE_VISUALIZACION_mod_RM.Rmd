@@ -1,0 +1,155 @@
+---
+title: "Geoanalisis Aplicado Para Analisis Pensiones Basicas Solidarias de Vejez PBSV"
+subtitle: "Trabajo final Diplomado Big Data para politicas publicas"
+author: "José Luis Toro"
+date: "21 de Diciembre de 2018"
+output:
+  html_document:
+    theme: paper
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+editor_options:
+  chunk_output_type: console
+---
+
+### Configuracion
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, comment = NA, warning = FALSE)
+
+setwd('F:/archivo base Potenciales PBSV/')
+getwd()
+```
+
+#### Instalar packages
+
+```{r}
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# usage
+
+packages <- c("rgdal","sf", "raster", # manejo de datos espaciales
+              "ggmap", # Geocodificacion
+              "ggplot2", "viridis", # cartografias estaticas
+              "digest","leaflet","RColorBrewer", # cartografias dinamicas
+              "spatstat", "spdep", "gstat", # analisis estadistico espacial
+              "leaps", "plyr","dplyr", # manipulacion y organizacion de datos
+              "xlsx","leaflet.extras") #excel
+ipak(packages)
+library(leaflet.extras)
+```
+
+##VISUALIZACION
+### 1.- Carga y preparacion de datos
+```{r}
+## Cargar mas datos de potenciales beneficiarios, beneficiarios y sucursales georreferenciadas para tener un mapa mas representativo
+dataPotTotal <- read.csv(file = "F:/archivo base Potenciales PBSV/data/FINAL/Potenciales_PBSV_regionmetropol_v2.csv", header = TRUE,sep=',', stringsAsFactors = FALSE)
+dataBenTotal <- read.csv(file = "F:/archivo base Potenciales PBSV/data/FINAL/Beneficiarios_PBSV_regionmetropol_v2.csv", header = TRUE,sep=',', stringsAsFactors = FALSE)
+sucursalesTotal <- read.csv(file = "F:/archivo base Potenciales PBSV/data/FINAL/base_sucursal_RM_ChileAtiende.csv", header = TRUE,sep=',', stringsAsFactors = FALSE)
+
+### Acá filtramos por la Comuna que analizaremos
+dataPot <- subset(dataPotTotal,dataPotTotal$Comuna_Fmt_google=="Providencia" )
+dataBen <- subset(dataBenTotal,dataBenTotal$Comuna_Fmt_google=="Providencia" )
+sucursales <- subset(sucursalesTotal,sucursalesTotal$Comuna_Fmt_google=="Providencia" )
+```
+### 2.- Transformacion de los datos a puntos espaciales usando las coordenadas provistas en los datos 
+```{r warning=FALSE, fig.height=8, fig.width=8}
+### latlon, Utilizado a escala mundial y por los datos espaciales de google
+crs_latlon <- "+proj=longlat +datum=WGS84 +no_defs"
+
+# Utilizamos utm
+### utm, utilizado a nivel regional (depende de la zona y hemisferio)
+crs_utm <- "+proj=utm +zone=19 +south +datum=WGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0"
+
+# Crear puntos espaciales en formato sp
+xy <- dataPot[,c("LON","LAT")]
+dataPot_sp <- SpatialPointsDataFrame(coords = xy, data = dataPot, proj4string = CRS(crs_latlon))
+xy <- dataBen[,c("LON","LAT")]
+dataBen_sp <- SpatialPointsDataFrame(coords = xy, data = dataBen, proj4string = CRS(crs_latlon))
+```
+### 3.- Generacion de un mapa de hotspots de potenciales y beneficiarios usando el procedimiento de Kernel de densidad
+```{r warning=FALSE, fig.height=8, fig.width=8}
+# Registrar coordenadas contenedoras de la data espacial
+dataPot_sp <- spTransform(dataPot_sp, CRS(crs_utm))
+dataBen_sp <- spTransform(dataBen_sp, CRS(crs_utm))
+
+extPot <- extent(dataPot_sp)    
+x_min <- extPot[1]  - 500
+x_max <- extPot[2] + 500
+y_min <- extPot[3] - 500
+y_max <- extPot[4] + 500
+wPot <- as.owin(c(x_min,x_max, y_min, y_max)) # ventana que define espacio de trabajo
+
+extBen <- extent(dataBen_sp)    
+x_min <- extBen[1]  - 500
+x_max <- extBen[2] + 500
+y_min <- extBen[3] - 500
+y_max <- extBen[4] + 500
+wBen <- as.owin(c(x_min,x_max, y_min, y_max)) # ventana que define espacio de trabajo
+
+# generar mapas de calor
+# base de puntos
+ptsPot <- coordinates(dataPot_sp)
+pPot <- ppp(ptsPot[,1], ptsPot[,2], window = wPot)
+
+# densidad calculada en radio un cuarto
+dens_Pot <- stats::density(pPot,  adjust=0.05)
+dev.off()
+plot(dens_Pot, main='Hotspot de Potenciales PBSV')
+
+ptsBen <- coordinates(dataBen_sp)
+pBen <- ppp(ptsBen[,1], ptsBen[,2], window = wPot)#<----Se utiliza la misma ventana de potenciales
+
+# densidad calculada en radio un cuarto
+dens_Ben <- stats::density(pBen,  adjust=0.05)
+
+dev.off()
+plot(dens_Ben, main='Hotspot de Beneficiarios PBSV')
+```
+### 4.- Visualizacion de mapa interactivo de varias capas
+```{r}
+RastPot <- raster(dens_Pot, crs = crs_utm)
+
+RastBen <- raster(dens_Ben, crs = crs_utm)
+# paleta de colores
+pal2 <- colorNumeric(c("#FFFFCC", "#ff4dd2", "#b30086"), values(RastPot),
+  na.color = "transparent")
+pal3 <- colorNumeric(c("#FFFFCC", "#ff4dd2", "#b30086"), values(RastBen),
+  na.color = "transparent")
+
+#install.packages("leaflet")
+#library(leaflet)
+#gc()
+leaflet() %>% 
+    # Base groups
+  addTiles(group = "OSM (default)") %>%
+  addProviderTiles(providers$CartoDB.Positron)%>%
+  addProviderTiles(providers$Esri.WorldImagery, group = "Satellite")%>%
+  addRasterImage(RastPot, colors = pal2, opacity = 0.5, group = "RasterPot") %>%
+  addRasterImage(RastBen, colors = pal3, opacity = 0.5, group = "RasterBen") %>%
+  addCircleMarkers( RastPot,lng = dataPot$LON, # we feed the longitude coordinates 
+                     lat = dataPot$LAT,
+                     radius = 0.8, 
+                     stroke = FALSE, 
+                     fillOpacity = 0.75,
+                     label = paste(as.character(dataPot$LAT), as.character(dataPot$LON), sep = ":"),
+                     group = "Circulos"
+                     )%>%
+  leaflet.extras::addWebGLHeatmap( lng=dataPot$LON, lat=dataPot$LAT, size = 300, group = "HeatmapPot") %>%
+  leaflet.extras::addWebGLHeatmap( lng=dataBen$LON, lat=dataBen$LAT, size = 300, group = "HeatmapBen") %>%
+  addMarkers(RastPot,lng=sucursales$LON, lat=sucursales$LAT, popup=sucursales$direccion_comp,group = "Sucursales")%>%
+ addLayersControl(
+    baseGroups = c("OSM (default)", "Satellite"),
+    overlayGroups = c( "RasterPot","RasterBen", "Circulos", "Sucursales", "HeatmapPot","HeatmapBen"),
+    options = layersControlOptions(collapsed = TRUE))%>%
+  hideGroup(c("RasterPot","HeatmapPot","Sucursales"))
+```
+
+
+ 
